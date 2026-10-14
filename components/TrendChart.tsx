@@ -19,6 +19,7 @@ import {
 import { fmtUsd, hms } from '@/lib/format';
 import type { DashboardState } from '@/lib/dashboard-types';
 import { getChartThemeColors, type ChartThemeColors } from '@/lib/theme';
+import { useLocale } from '@/lib/use-locale';
 import { useTheme } from '@/lib/use-theme';
 
 interface TrendChartProps {
@@ -90,6 +91,7 @@ function dedupeByTime(
 
 export function TrendChart({ trend, equity }: TrendChartProps) {
   const { theme } = useTheme();
+  const { messages, translateReason } = useLocale();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
@@ -250,7 +252,7 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
         position: up ? 'aboveBar' : 'belowBar',
         color: up ? colors.up : colors.down,
         shape: 'circle',
-        text: `${point.symbol} ${up ? '+' : '-'}${fmtUsd(Math.abs(point.pnl))} · ${point.reason}`,
+        text: `${point.symbol} ${up ? '+' : '-'}${fmtUsd(Math.abs(point.pnl))} · ${translateReason(point.reason)}`,
       });
     }
 
@@ -259,13 +261,13 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
     );
 
     chart.timeScale().fitContent();
-  }, [theme, trend, equity]);
+  }, [theme, trend, equity, translateReason]);
 
   const legendItems = [
-    { color: 'var(--up)', label: '总盈亏（含浮动）' },
-    { color: 'var(--text-3)', label: '已实现' },
-    { color: 'var(--up)', label: '盈利成交' },
-    { color: 'var(--down)', label: '亏损成交' },
+    { id: 'total', color: 'var(--up)', label: messages.chart.total },
+    { id: 'realized', color: 'var(--text-3)', label: messages.chart.realized },
+    { id: 'winTrade', color: 'var(--up)', label: messages.chart.winTrade },
+    { id: 'lossTrade', color: 'var(--down)', label: messages.chart.lossTrade },
   ];
 
   return (
@@ -274,13 +276,13 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
         <div ref={containerRef} className="absolute inset-0" />
         {!trend.length ? (
           <div className="absolute inset-0 grid place-items-center text-[11px] text-[var(--text-3)]">
-            等待采样数据，盈利趋势将在此呈现
+            {messages.chart.empty}
           </div>
         ) : null}
       </div>
       <div className="flex flex-none flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-[var(--line)] px-2 py-1.5">
         {legendItems.map((item) => (
-          <span key={item.label} className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-2)]">
+          <span key={item.id} className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-2)]">
             <span className="h-1.5 w-1.5 rounded-sm" style={{ background: item.color }} />
             {item.label}
           </span>

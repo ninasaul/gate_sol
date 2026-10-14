@@ -10,6 +10,7 @@ import type {
   VerdictFilter,
 } from '@/lib/dashboard-types';
 import { fmtPct, fmtUsd, hms } from '@/lib/format';
+import { useLocale } from '@/lib/use-locale';
 
 export type StageTab = 'signals' | 'trades';
 
@@ -29,9 +30,9 @@ interface StagePanelProps {
   trades: DashboardState['recentTrades'];
 }
 
-const TABS: Array<{ id: StageTab; label: string; icon: string }> = [
-  { id: 'signals', label: '信号流', icon: 'pulse-2' },
-  { id: 'trades', label: '成交', icon: 'history' },
+const TABS: Array<{ id: StageTab; icon: string }> = [
+  { id: 'signals', icon: 'pulse-2' },
+  { id: 'trades', icon: 'history' },
 ];
 
 export function StagePanel({
@@ -49,12 +50,19 @@ export function StagePanel({
   equity,
   trades,
 }: StagePanelProps) {
+  const { messages, translateReason } = useLocale();
+  const copy = messages.stage;
+  const tabLabel: Record<StageTab, string> = {
+    signals: copy.signals,
+    trades: copy.trades,
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5">
       <section className="panel h-[220px] flex-none min-[1200px]:h-[240px]">
         <div className="panel-head">
           <SolarIcon name="chart-2" size={12} className="text-[var(--accent)]" />
-          <h2 className="panel-title">盈利趋势</h2>
+          <h2 className="panel-title">{copy.trend}</h2>
           <span className="panel-count">{trend.length}</span>
         </div>
         <div className="min-h-0 flex-1">
@@ -76,7 +84,7 @@ export function StagePanel({
               }`}
             >
               <SolarIcon name={item.icon} size={12} />
-              {item.label}
+              {tabLabel[item.id]}
             </button>
           ))}
         </div>
@@ -98,15 +106,15 @@ export function StagePanel({
           {tab === 'trades' ? (
             <div className="flex h-full min-h-0 flex-col">
               <div className="signal-table-head !grid-cols-[1fr_1fr_1.4fr_1fr_80px]">
-                <span>Symbol</span>
-                <span className="text-right">盈亏</span>
-                <span>原因</span>
-                <span className="text-right">涨跌幅</span>
-                <span className="text-right">时间</span>
+                <span>{copy.symbol}</span>
+                <span className="text-right">{copy.pnl}</span>
+                <span>{copy.reason}</span>
+                <span className="text-right">{copy.change}</span>
+                <span className="text-right">{copy.time}</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {trades.length === 0 ? (
-                  <div className="empty-compact">暂无成交</div>
+                  <div className="empty-compact">{copy.emptyTrades}</div>
                 ) : (
                   trades.map((trade, index) => {
                     const up = trade.pnlUsd >= 0;
@@ -126,7 +134,9 @@ export function StagePanel({
                           {up ? '+' : '-'}
                           {fmtUsd(Math.abs(trade.pnlUsd))}
                         </span>
-                        <span className="truncate text-[10px] text-[var(--text-2)]">{trade.reason}</span>
+                        <span className="truncate text-[10px] text-[var(--text-2)]">
+                          {translateReason(trade.reason)}
+                        </span>
                         <span
                           className={`text-right font-[family-name:var(--font-mono)] text-[10px] ${
                             up ? 'text-[var(--up)]' : 'text-[var(--down)]'

@@ -17,17 +17,21 @@ import {
 } from '@/lib/dashboard-types';
 import { exportSignalsCsv, exportTradesCsv, summarizeRejectReasons } from '@/lib/export-csv';
 import { hms } from '@/lib/format';
+import { LocaleProvider, useLocale } from '@/lib/use-locale';
 import { ThemeProvider } from '@/lib/use-theme';
 
 export function Dashboard() {
   return (
     <ThemeProvider>
-      <DashboardInner />
+      <LocaleProvider>
+        <DashboardInner />
+      </LocaleProvider>
     </ThemeProvider>
   );
 }
 
 function DashboardInner() {
+  const { translateReason } = useLocale();
   const [state, setState] = useState<DashboardState>(emptyState);
   const [connected, setConnected] = useState(false);
   const [clock, setClock] = useState('--:--:--');
@@ -237,8 +241,8 @@ function DashboardInner() {
         pnlFlash={pnlFlash}
         configOpen={configOpen}
         onToggleConfig={() => setConfigOpen((value) => !value)}
-        onExportTrades={() => exportTradesCsv(state)}
-        onExportSignals={() => exportSignalsCsv(state.recentSignals)}
+        onExportTrades={() => exportTradesCsv(state, translateReason)}
+        onExportSignals={() => exportSignalsCsv(state.recentSignals, translateReason)}
       />
 
       <ConfigPanel open={configOpen} config={state.config} />

@@ -2,6 +2,7 @@
 
 import type { DashboardState } from '@/lib/dashboard-types';
 import { fmtNum, fmtPct, fmtUsd } from '@/lib/format';
+import { useLocale } from '@/lib/use-locale';
 
 interface StatusBarProps {
   state: DashboardState;
@@ -9,15 +10,17 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ state, connected }: StatusBarProps) {
+  const { messages } = useLocale();
+  const copy = messages.status;
   const items = [
     state.mode === 'live' ? 'LIVE' : 'DEMO',
-    connected ? 'SSE connected' : 'SSE reconnecting',
-    `processed ${state.summary.total}`,
-    `open ${state.openPositions.length}`,
-    `win ${fmtPct(state.stats.winRatePct)}`,
-    `pf ${fmtNum(state.stats.profitFactor)}`,
-    `pnl ${fmtUsd(state.stats.totalPnlUsd)}`,
-    'signal for reference only',
+    connected ? copy.sseConnected : copy.sseReconnecting,
+    copy.processed(state.summary.total),
+    copy.open(state.openPositions.length),
+    copy.win(fmtPct(state.stats.winRatePct)),
+    copy.profitFactor(fmtNum(state.stats.profitFactor)),
+    copy.pnl(fmtUsd(state.stats.totalPnlUsd)),
+    copy.disclaimer,
   ];
 
   return (

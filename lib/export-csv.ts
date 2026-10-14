@@ -17,14 +17,17 @@ function escapeCell(value: string | number): string {
   return text;
 }
 
-export function exportTradesCsv(state: DashboardState): void {
+export function exportTradesCsv(
+  state: DashboardState,
+  translateReason: (reason: string) => string = (reason) => reason,
+): void {
   const header = ['symbol', 'pnlUsd', 'pnlPct', 'reason', 'time'];
   const rows = state.recentTrades.map((trade) =>
     [
       trade.symbol,
       trade.pnlUsd.toFixed(2),
       trade.pnlPct.toFixed(1),
-      trade.reason,
+      translateReason(trade.reason),
       hms(trade.ts),
     ]
       .map(escapeCell)
@@ -33,7 +36,10 @@ export function exportTradesCsv(state: DashboardState): void {
   downloadCsv(`gatesol-trades-${Date.now()}.csv`, [header.join(','), ...rows].join('\n'));
 }
 
-export function exportSignalsCsv(signals: DashboardSignal[]): void {
+export function exportSignalsCsv(
+  signals: DashboardSignal[],
+  translateReason: (reason: string) => string = (reason) => reason,
+): void {
   const header = ['symbol', 'mint', 'dex', 'verdict', 'priceUsd', 'liquidityUsd', 'devPct', 'reasons', 'time'];
   const rows = signals.map((signal) =>
     [
@@ -44,7 +50,7 @@ export function exportSignalsCsv(signals: DashboardSignal[]): void {
       signal.priceUsd,
       signal.liquidityUsd,
       signal.devPct,
-      (signal.reasons || []).join(' | '),
+      (signal.reasons || []).map((reason) => translateReason(reason)).join(' | '),
       hms(signal.ts),
     ]
       .map(escapeCell)

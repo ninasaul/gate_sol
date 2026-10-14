@@ -3,8 +3,9 @@
 import { TokenLink } from '@/components/TokenLink';
 import type { DashboardSignal, DexFilter, VerdictFilter } from '@/lib/dashboard-types';
 import { fmtPct, fmtPrice, fmtUsd, hms } from '@/lib/format';
+import { useLocale } from '@/lib/use-locale';
 
-const CHECK_LABEL = { security: '安', liquidity: '流', holders: '仓' } as const;
+const CHECK_KEYS = ['security', 'liquidity', 'holders'] as const;
 const DEX_META: Record<string, { label: string; logo: string }> = {
   pumpfun: { label: 'pump', logo: '/assets/pumpfun.png' },
   raydium: { label: 'ray', logo: '/assets/raydium.png' },
@@ -31,6 +32,16 @@ export function SignalPanel({
   onDexChange,
   onQueryChange,
 }: SignalPanelProps) {
+  const { messages, translateReason } = useLocale();
+  const copy = messages.signal;
+  const checkCopy = {
+    security: { label: copy.checkSecurity, title: copy.checkSecurityTitle },
+    liquidity: { label: copy.checkLiquidity, title: copy.checkLiquidityTitle },
+    holders: { label: copy.checkHolders, title: copy.checkHoldersTitle },
+  };
+  const reasonText = (reasons: string[]) =>
+    reasons.map((reason) => translateReason(reason)).join(' · ');
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-[var(--line)] px-2 py-1.5">
@@ -45,7 +56,7 @@ export function SignalPanel({
                 : 'text-[var(--text-3)]'
             }`}
           >
-            {item}
+            {item === 'ALL' ? copy.all : item}
           </button>
         ))}
         <span className="mx-0.5 h-3 w-px bg-[var(--line)]" />
@@ -60,13 +71,13 @@ export function SignalPanel({
                 : 'text-[var(--text-3)]'
             }`}
           >
-            {item === 'ALL' ? 'DEX' : item}
+            {item === 'ALL' ? copy.all : item}
           </button>
         ))}
         <input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="symbol / mint"
+          placeholder={copy.placeholder}
           className="ui-field ml-auto min-w-[120px] flex-1 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--text)] outline-none placeholder:text-[var(--text-3)]"
         />
         <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)]">
@@ -75,20 +86,20 @@ export function SignalPanel({
       </div>
 
       <div className="signal-table-head">
-        <span>Symbol</span>
-        <span>判定</span>
-        <span>检查</span>
-        <span>原因</span>
-        <span className="text-right">价格</span>
-        <span className="text-right">市值</span>
-        <span className="signal-col-liquidity text-right">流动性</span>
-        <span className="signal-col-dev text-right">Dev</span>
-        <span className="signal-col-time text-right">时间</span>
+        <span>{copy.symbol}</span>
+        <span>{copy.verdict}</span>
+        <span>{copy.checks}</span>
+        <span>{copy.reason}</span>
+        <span className="text-right">{copy.price}</span>
+        <span className="text-right">{copy.marketCap}</span>
+        <span className="signal-col-liquidity text-right">{copy.liquidity}</span>
+        <span className="signal-col-dev text-right">{copy.dev}</span>
+        <span className="signal-col-time text-right">{copy.time}</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {signals.length === 0 ? (
-          <div className="empty-compact">无匹配信号</div>
+          <div className="empty-compact">{copy.empty}</div>
         ) : (
           signals.map((signal) => {
             const dexMeta = DEX_META[signal.dex];
@@ -118,7 +129,7 @@ export function SignalPanel({
                   {signal.verdict}
                 </span>
                 <div className="flex gap-0.5">
-                  {(Object.keys(CHECK_LABEL) as Array<keyof typeof CHECK_LABEL>).map((key) => {
+                  {CHECK_KEYS.map((key) => {
                     const ok = signal.checks[key];
                     return (
                       <span
@@ -128,15 +139,15 @@ export function SignalPanel({
                             ? 'bg-[var(--buy-soft)] text-[var(--buy)]'
                             : 'bg-[var(--skip-soft)] text-[var(--skip)]'
                         }`}
-                        title={key}
+                        title={checkCopy[key].title}
                       >
-                        {CHECK_LABEL[key]}
+                        {checkCopy[key].label}
                       </span>
                     );
                   })}
                 </div>
-                <div className="truncate text-[10px] text-[var(--text-2)]" title={(signal.reasons || []).join(' · ')}>
-                  {(signal.reasons || []).join(' · ') || '--'}
+                <div className="truncate text-[10px] text-[var(--text-2)]" title={reasonText(signal.reasons || [])}>
+                  {reasonText(signal.reasons || []) || '--'}
                 </div>
                 <span className="text-right font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-2)] tabular-nums">
                   {fmtPrice(signal.priceUsd)}

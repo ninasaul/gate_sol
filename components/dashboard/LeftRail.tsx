@@ -4,6 +4,7 @@ import { SolarIcon } from '@/components/SolarIcon';
 import { TokenLink } from '@/components/TokenLink';
 import type { DashboardConfig, DashboardPosition, DashboardState } from '@/lib/dashboard-types';
 import { fmtPct, fmtPrice, fmtUsd } from '@/lib/format';
+import { useLocale } from '@/lib/use-locale';
 
 interface LeftRailProps {
   positions: DashboardPosition[];
@@ -22,12 +23,14 @@ export function LeftRail({
   config,
   onSelectPosition,
 }: LeftRailProps) {
+  const { messages, translateReason } = useLocale();
+  const copy = messages.rail;
   const rejectMax = Math.max(1, ...rejectItems.map((item) => item.count));
   const configRows = [
-    { label: '流动性', value: fmtUsd(config.filters.minLiquidityUsd) },
-    { label: 'Dev上限', value: `${config.filters.maxDevHoldingPct}%` },
-    { label: '止损', value: `${config.trading.stopLossPct}%` },
-    { label: '奔跑', value: `+${config.trading.moonActivatePct}%` },
+    { id: 'liquidity', label: copy.liquidity, value: fmtUsd(config.filters.minLiquidityUsd) },
+    { id: 'devCap', label: copy.devCap, value: `${config.filters.maxDevHoldingPct}%` },
+    { id: 'stopLoss', label: copy.stopLoss, value: `${config.trading.stopLossPct}%` },
+    { id: 'moon', label: copy.moon, value: `+${config.trading.moonActivatePct}%` },
   ];
 
   return (
@@ -35,12 +38,12 @@ export function LeftRail({
       <section className="panel min-h-0 flex-[1.2]">
         <div className="panel-head">
           <SolarIcon name="box" size={12} className="text-[var(--accent)]" />
-          <h2 className="panel-title">持仓</h2>
+          <h2 className="panel-title">{copy.positions}</h2>
           <span className="panel-count">{positions.length}</span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {positions.length === 0 ? (
-            <div className="empty-compact">暂无持仓</div>
+            <div className="empty-compact">{copy.emptyPositions}</div>
           ) : (
             positions.map((position) => {
               const up = position.unrealizedPct >= 0;
@@ -89,7 +92,7 @@ export function LeftRail({
                       {fmtPct(position.unrealizedPct)}
                     </div>
                     <div className="text-[9px] text-[var(--text-3)]">
-                      {position.mooned ? '奔跑' : fmtUsd(position.sizeUsd)}
+                      {position.mooned ? copy.running : fmtUsd(position.sizeUsd)}
                     </div>
                   </div>
                 </div>
@@ -102,12 +105,12 @@ export function LeftRail({
       <section className="panel min-h-0 flex-1">
         <div className="panel-head">
           <SolarIcon name="eye" size={12} className="text-[var(--accent)]" />
-          <h2 className="panel-title">观察</h2>
+          <h2 className="panel-title">{copy.watch}</h2>
           <span className="panel-count">{watchCount}</span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {watchlist.length === 0 ? (
-            <div className="empty-compact">暂无观察</div>
+            <div className="empty-compact">{copy.emptyWatch}</div>
           ) : (
             watchlist.slice(0, 40).map((item, index) => (
               <div key={`${item.mint}-${item.symbol}-${index}`} className="row-compact ui-row">
@@ -119,7 +122,7 @@ export function LeftRail({
                     {item.symbol}
                   </TokenLink>
                   <div className="truncate text-[9px] text-[var(--text-3)]">
-                    {(item.reasons || []).join(' · ') || '--'}
+                    {(item.reasons || []).map((reason) => translateReason(reason)).join(' · ') || '--'}
                   </div>
                 </div>
               </div>
@@ -131,17 +134,17 @@ export function LeftRail({
       <section className="panel flex-none">
         <div className="panel-head">
           <SolarIcon name="forbidden" size={12} className="text-[var(--accent)]" />
-          <h2 className="panel-title">拒绝 Top</h2>
+          <h2 className="panel-title">{copy.rejectTop}</h2>
         </div>
         <div className="max-h-[120px] space-y-1.5 overflow-y-auto px-2 py-1.5">
           {rejectItems.length === 0 ? (
-            <div className="empty-compact !py-2">暂无</div>
+            <div className="empty-compact !py-2">{copy.emptyReject}</div>
           ) : (
             rejectItems.slice(0, 5).map((item) => (
               <div key={item.reason}>
                 <div className="mb-0.5 flex justify-between gap-2">
-                  <span className="truncate text-[10px] text-[var(--text-2)]" title={item.reason}>
-                    {item.reason}
+                  <span className="truncate text-[10px] text-[var(--text-2)]" title={translateReason(item.reason)}>
+                    {translateReason(item.reason)}
                   </span>
                   <span className="font-[family-name:var(--font-mono)] text-[9px] text-[var(--text-3)]">
                     {item.count}
@@ -162,11 +165,11 @@ export function LeftRail({
       <section className="panel flex-none">
         <div className="panel-head">
           <SolarIcon name="settings" size={12} className="text-[var(--accent)]" />
-          <h2 className="panel-title">阈值</h2>
+          <h2 className="panel-title">{copy.thresholds}</h2>
         </div>
         <div className="grid grid-cols-2 gap-x-2 gap-y-1 px-2 py-1.5">
           {configRows.map((row) => (
-            <div key={row.label} className="flex items-baseline justify-between gap-1">
+            <div key={row.id} className="flex items-baseline justify-between gap-1">
               <span className="text-[9px] text-[var(--text-3)]">{row.label}</span>
               <span className="font-[family-name:var(--font-mono)] text-[10px]">{row.value}</span>
             </div>

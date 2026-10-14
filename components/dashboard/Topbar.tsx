@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { SolarIcon } from '@/components/SolarIcon';
 import type { DashboardState } from '@/lib/dashboard-types';
 import { fmtNum, fmtPct, fmtUsd } from '@/lib/format';
+import type { Locale } from '@/lib/locale';
+import { useLocale } from '@/lib/use-locale';
 import { useTheme } from '@/lib/use-theme';
 
 export type PnlFlash = 'up' | 'down' | null;
@@ -35,6 +37,8 @@ export function Topbar({
   const [feedFlash, setFeedFlash] = useState(false);
   const wasConnected = useRef(connected);
   const { theme, toggleTheme } = useTheme();
+  const { locale, setLocale, messages } = useLocale();
+  const copy = messages.topbar;
 
   useEffect(() => {
     if (connected && !wasConnected.current) {
@@ -47,18 +51,19 @@ export function Topbar({
   }, [connected]);
 
   const metrics = [
-    { label: '处理', value: String(state.summary.total) },
-    { label: 'BUY', value: String(state.summary.BUY), tone: 'text-[var(--buy)]' },
-    { label: 'OBS', value: String(state.summary.OBSERVE), tone: 'text-[var(--obs)]' },
-    { label: 'SKIP', value: String(state.summary.SKIP), tone: 'text-[var(--skip)]' },
+    { id: 'processed', label: copy.processed, value: String(state.summary.total) },
+    { id: 'buy', label: 'BUY', value: String(state.summary.BUY), tone: 'text-[var(--buy)]' },
+    { id: 'observe', label: 'OBS', value: String(state.summary.OBSERVE), tone: 'text-[var(--obs)]' },
+    { id: 'skip', label: 'SKIP', value: String(state.summary.SKIP), tone: 'text-[var(--skip)]' },
     {
+      id: 'pnl',
       label: 'PnL',
       value: fmtUsd(state.stats.totalPnlUsd),
       tone: pnlUp ? 'text-[var(--up)]' : 'text-[var(--down)]',
       flash: pnlFlash,
     },
-    { label: 'PF', value: fmtNum(state.stats.profitFactor) },
-    { label: '胜率', value: fmtPct(state.stats.winRatePct) },
+    { id: 'profitFactor', label: 'PF', value: fmtNum(state.stats.profitFactor) },
+    { id: 'winRate', label: copy.winRate, value: fmtPct(state.stats.winRatePct) },
   ];
 
   return (
@@ -89,16 +94,16 @@ export function Topbar({
               className={`block h-1.5 w-1.5 rounded-full ${connected ? 'live-dot-pulse bg-[var(--buy)]' : 'bg-[var(--text-3)]'}`}
             />
           </span>
-          {connected ? 'LIVE FEED' : 'RECONNECT'}
+          {connected ? copy.liveFeed : copy.reconnect}
         </span>
 
         <div className="ml-1 hidden items-center gap-px min-[900px]:flex">
           {metrics.map((metric) => {
-            const isPnl = metric.label === 'PnL';
+            const isPnl = metric.id === 'pnl';
             const flash = isPnl ? metric.flash : null;
             return (
               <div
-                key={metric.label}
+                key={metric.id}
                 className={`kpi-chip ui-chip flex items-baseline gap-1 rounded px-2 py-0.5 ${
                   flash === 'up'
                     ? 'kpi-flash-up'
@@ -140,21 +145,21 @@ export function Topbar({
           }`}
         >
           <SolarIcon name="settings" size={11} />
-          阈值
+          {copy.thresholds}
         </button>
         <button
           type="button"
           onClick={onExportTrades}
           className="ui-press inline-flex items-center gap-1 rounded border border-[var(--line)] px-2 py-1 text-[10px] text-[var(--text-2)]"
         >
-          导出成交
+          {copy.exportTrades}
         </button>
         <button
           type="button"
           onClick={onExportSignals}
           className="ui-press hidden items-center gap-1 rounded border border-[var(--line)] px-2 py-1 text-[10px] text-[var(--text-2)] min-[720px]:inline-flex"
         >
-          导出信号
+          {copy.exportSignals}
         </button>
         <span className="hidden min-w-[58px] text-right font-[family-name:var(--font-mono)] text-[11px] text-[var(--text-2)] min-[520px]:inline">
           {clock}
@@ -162,12 +167,33 @@ export function Topbar({
         <button
           type="button"
           onClick={toggleTheme}
-          aria-label={theme === 'dark' ? '切换浅色主题' : '切换深色主题'}
-          title={theme === 'dark' ? '浅色' : '深色'}
+          aria-label={theme === 'dark' ? copy.themeToLight : copy.themeToDark}
+          title={theme === 'dark' ? copy.themeLight : copy.themeDark}
           className="ui-icon-btn inline-flex h-[26px] w-[26px] items-center justify-center rounded border border-[var(--line)] text-[var(--text-2)]"
         >
           <SolarIcon name={theme === 'dark' ? 'sun-2' : 'moon'} size={13} />
         </button>
+        <div
+          className="inline-flex overflow-hidden rounded border border-[var(--line)]"
+          role="group"
+          aria-label={copy.switchLanguage}
+        >
+          {(['zh', 'en'] as Locale[]).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={locale === option}
+              onClick={() => setLocale(option)}
+              className={`ui-press px-1.5 py-1 font-[family-name:var(--font-mono)] text-[10px] ${
+                locale === option
+                  ? 'bg-[var(--surface-2)] text-[var(--text)]'
+                  : 'text-[var(--text-3)]'
+              }`}
+            >
+              {option === 'zh' ? '中' : 'EN'}
+            </button>
+          ))}
+        </div>
       </div>
     </header>
   );
