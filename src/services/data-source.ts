@@ -386,6 +386,7 @@ export class SolanaDataSource implements DataSource {
         name?: string | null;
         symbol?: string | null;
         imageUrl?: string | null;
+        uri?: string | null;
       },
       sourceLabel: string,
     ) => {
@@ -396,6 +397,7 @@ export class SolanaDataSource implements DataSource {
           attrs: {
             ...(event.symbol ? { symbol: event.symbol } : {}),
             ...(event.name ? { name: event.name } : {}),
+            ...(event.uri ? { uri: event.uri } : {}),
           },
           pool: event.poolAddress ? { id: event.poolAddress } : { id: null },
           imageUrl: event.imageUrl ?? null,
@@ -809,6 +811,71 @@ export class SolanaDataSource implements DataSource {
     return left || 'UNKNOWN';
   }
 
+  private isUnknownLabel(value: string | null | undefined): boolean {
+    const text = String(value ?? '').trim();
+    return !text || /^unknown$/i.test(text);
+  }
+
+  /** 从 token metadata URI（多为 IPFS JSON）取 name/symbol */
+  private async fetchUriTokenMeta(
+    uri: string,
+  ): Promise<{ symbol: string | null; name: string | null; imageUrl: string | null } | null> {
+    const raw = uri.trim();
+    if (!raw || /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(raw)) return null;
+    const url = raw.startsWith('ipfs://')
+      ? `https://ipfs.io/ipfs/${raw.slice('ipfs://'.length)}`
+      : raw;
+    if (!/^https?:\/\//i.test(url)) return null;
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(5_000),
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as Record<string, unknown>;
+      const symbol = String(data.symbol ?? '').trim() || null;
+      const name = String(data.name ?? '').trim() || null;
+      const imageUrl = String(data.image ?? data.image_url ?? '').trim() || null;
+      if (!symbol && !name) return null;
+      return { symbol, name, imageUrl };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 外盘/毕业缺名时兜底：DexScreener（避开 Gecko 429） */
+  private async fetchDexScreenerMeta(
+    mint: string,
+  ): Promise<{ symbol: string | null; name: string | null; imageUrl: string | null } | null> {
+    try {
+      const res = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`,
+        { signal: AbortSignal.timeout(6_000) },
+      );
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        pairs?: Array<{
+          baseToken?: { address?: string; symbol?: string; name?: string };
+          quoteToken?: { address?: string; symbol?: string; name?: string };
+          info?: { imageUrl?: string };
+        }>;
+      };
+      const pairs = data.pairs ?? [];
+      for (const pair of pairs) {
+        for (const side of [pair.baseToken, pair.quoteToken]) {
+          if (!side?.address || side.address !== mint) continue;
+          const symbol = String(side.symbol ?? '').trim() || null;
+          const name = String(side.name ?? '').trim() || symbol;
+          const imageUrl = String(pair.info?.imageUrl ?? '').trim() || null;
+          if (symbol || name) return { symbol, name, imageUrl };
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private async fetchRugCheck(mint: string): Promise<any | null> {
     try {
       const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${mint}/report`, {
@@ -945,23 +1012,46 @@ export class SolanaDataSource implements DataSource {
           ? 'pumpfun'
           : 'raydium');
 
-      // 新币 RugCheck 常无 meta；优先发现源 attrs（PumpPortal name/symbol）
-      const rawSymbol = String(
-        attrs?.symbol ||
-          tokenMeta.symbol ||
-          this.symbolFromPoolName(String(attrs?.name ?? '')) ||
-          'UNKNOWN',
+      // 新币 RugCheck 常无 meta；优先发现源 attrs → RugCheck → DexScreener
+      let resolvedSymbol = String(
+        attrs?.symbol || tokenMeta.symbol || this.symbolFromPoolName(String(attrs?.name ?? '')),
       ).trim();
+      let resolvedName = String(attrs?.name || tokenMeta.name || '').trim();
+      let resolvedImage = imageUrl;
+
+      if (this.isUnknownLabel(resolvedSymbol) || !resolvedName) {
+        const uriMeta = await this.fetchUriTokenMeta(String(attrs?.uri ?? ''));
+        if (uriMeta) {
+          if (this.isUnknownLabel(resolvedSymbol) && uriMeta.symbol) {
+            resolvedSymbol = uriMeta.symbol;
+          }
+          if (!resolvedName && uriMeta.name) resolvedName = uriMeta.name;
+          if (!resolvedImage && uriMeta.imageUrl) resolvedImage = uriMeta.imageUrl;
+        }
+      }
+
+      if (this.isUnknownLabel(resolvedSymbol) || !resolvedName) {
+        const external = await this.fetchDexScreenerMeta(mint);
+        if (external) {
+          if (this.isUnknownLabel(resolvedSymbol) && external.symbol) {
+            resolvedSymbol = external.symbol;
+          }
+          if (!resolvedName && external.name) resolvedName = external.name;
+          if (!resolvedImage && external.imageUrl) resolvedImage = external.imageUrl;
+        }
+      }
+
+      const rawSymbol = resolvedSymbol || 'UNKNOWN';
       const symbol = rawSymbol.includes('/')
         ? this.symbolFromPoolName(rawSymbol)
         : rawSymbol || 'UNKNOWN';
-      const displayName = String(attrs?.name || tokenMeta.name || symbol).trim() || symbol;
+      const displayName = (resolvedName || symbol).trim() || symbol;
 
       return {
         mint,
         symbol: symbol.toUpperCase(),
         name: displayName,
-        imageUrl,
+        imageUrl: resolvedImage,
         dex,
         poolAddress: String(pool?.id ?? lp?.pool_pubkey ?? null),
         createdAtMs: now,

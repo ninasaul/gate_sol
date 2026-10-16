@@ -2,6 +2,13 @@ import { logger } from '../utils/logger.js';
 import type { ChainDiscovery } from './chain-scanner.js';
 
 const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
+const META_CACHE_LIMIT = 4_000;
+
+interface TokenMetaCache {
+  name: string | null;
+  symbol: string | null;
+  uri: string | null;
+}
 
 export interface PumpPortalScannerOptions {
   onDiscovery: (event: ChainDiscovery) => void;
@@ -11,6 +18,8 @@ export interface PumpPortalScannerOptions {
  * PumpPortal 免费流（同一条 WS）：
  * - subscribeNewToken → 内盘刚 mint（pumpfun）
  * - subscribeMigration → 毕业上外盘（raydium / pump-amm）
+ *
+ * 毕业事件常不带 name/symbol，用 create 时缓存回填。
  */
 export class PumpPortalScanner {
   private socket: WebSocket | null = null;
@@ -18,6 +27,7 @@ export class PumpPortalScanner {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private readonly onDiscovery: (event: ChainDiscovery) => void;
+  private readonly metaByMint = new Map<string, TokenMetaCache>();
 
   constructor(opts: PumpPortalScannerOptions) {
     this.onDiscovery = opts.onDiscovery;
@@ -44,6 +54,7 @@ export class PumpPortalScanner {
       /* ignore */
     }
     this.socket = null;
+    this.metaByMint.clear();
   }
 
   private connect(): void {
@@ -73,9 +84,23 @@ export class PumpPortalScanner {
         if (!mint) return;
 
         const migration = this.isMigrationPayload(payload);
-        const name = String(payload.name ?? '').trim() || null;
-        const symbol = String(payload.symbol ?? '').trim() || null;
-        const uri = String(payload.uri ?? '').trim() || null;
+        let name = String(payload.name ?? '').trim() || null;
+        let symbol = String(payload.symbol ?? '').trim() || null;
+        let uri = String(payload.uri ?? '').trim() || null;
+
+        if (!migration && (name || symbol || uri)) {
+          this.rememberMeta(mint, { name, symbol, uri });
+        }
+
+        if (migration) {
+          const cached = this.metaByMint.get(mint);
+          if (cached) {
+            name = name || cached.name;
+            symbol = symbol || cached.symbol;
+            uri = uri || cached.uri;
+          }
+        }
+
         const imageUrl =
           uri && /\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(uri) ? uri : null;
         const poolAddress = this.resolvePoolAddress(payload);
@@ -107,6 +132,14 @@ export class PumpPortalScanner {
     socket.addEventListener('error', () => {
       /* close 会随后触发 */
     });
+  }
+
+  private rememberMeta(mint: string, meta: TokenMetaCache): void {
+    if (this.metaByMint.size >= META_CACHE_LIMIT) {
+      const oldest = this.metaByMint.keys().next().value;
+      if (oldest) this.metaByMint.delete(oldest);
+    }
+    this.metaByMint.set(mint, meta);
   }
 
   private isMigrationPayload(payload: Record<string, unknown>): boolean {
