@@ -63,6 +63,7 @@ export const zh: Messages = {
     price: '价格',
     marketCap: '市值',
     liquidity: '流动性',
+    holders: '持仓人数',
     dev: 'Dev',
     time: '时间',
     empty: '无匹配信号',

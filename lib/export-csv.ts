@@ -40,7 +40,18 @@ export function exportSignalsCsv(
   signals: DashboardSignal[],
   translateReason: (reason: string) => string = (reason) => reason,
 ): void {
-  const header = ['symbol', 'mint', 'dex', 'verdict', 'priceUsd', 'liquidityUsd', 'devPct', 'reasons', 'time'];
+  const header = [
+    'symbol',
+    'mint',
+    'dex',
+    'verdict',
+    'priceUsd',
+    'liquidityUsd',
+    'holderCount',
+    'devPct',
+    'reasons',
+    'time',
+  ];
   const rows = signals.map((signal) =>
     [
       signal.symbol,
@@ -49,6 +60,7 @@ export function exportSignalsCsv(
       signal.verdict,
       signal.priceUsd,
       signal.liquidityUsd,
+      signal.holderCount,
       signal.devPct,
       (signal.reasons || []).map((reason) => translateReason(reason)).join(' | '),
       hms(signal.ts),

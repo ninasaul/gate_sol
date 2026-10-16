@@ -13,6 +13,7 @@ export interface SignalEvent {
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number;
+  holderCount: number;
   devPct: number;
   whaleCount: number;
   ts: number;

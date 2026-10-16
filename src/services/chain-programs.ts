@@ -11,7 +11,7 @@ export const QUOTE_MINTS = new Set<string>([
   'USD1ttGY1N17NEEOGmADkUENaL5VyREbY1X8d4jJ3n', // USD1 (偶见)
 ]);
 
-export type ChainProgramKind = 'pump' | 'raydium_amm' | 'raydium_cpmm';
+export type ChainProgramKind = 'pump' | 'raydium_amm' | 'raydium_cpmm' | 'migration';
 
 export interface ChainProgramSpec {
   kind: ChainProgramKind;

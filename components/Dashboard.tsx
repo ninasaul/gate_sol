@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfigPanel } from '@/components/dashboard/ConfigPanel';
 import { LeftRail } from '@/components/dashboard/LeftRail';
 import { PositionDrawer } from '@/components/dashboard/PositionDrawer';
-import { StagePanel, type StageTab } from '@/components/dashboard/StagePanel';
+import { StagePanel } from '@/components/dashboard/StagePanel';
 import { StatusBar } from '@/components/dashboard/StatusBar';
 import { Topbar, type PnlFlash } from '@/components/dashboard/Topbar';
 import {
@@ -39,7 +39,6 @@ function DashboardInner() {
   const [verdict, setVerdict] = useState<VerdictFilter>('ALL');
   const [dex, setDex] = useState<DexFilter>('ALL');
   const [query, setQuery] = useState('');
-  const [stageTab, setStageTab] = useState<StageTab>('signals');
   const [configOpen, setConfigOpen] = useState(false);
   const [selectedPosition, setSelectedPosition] = useState<DashboardPosition | null>(null);
   const lastPnl = useRef<number | null>(null);
@@ -259,8 +258,6 @@ function DashboardInner() {
 
         <div className="min-h-0 min-w-0 flex-1">
           <StagePanel
-            tab={stageTab}
-            onTabChange={setStageTab}
             signals={filteredSignals}
             totalCount={state.summary.total}
             verdict={verdict}

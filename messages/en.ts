@@ -63,6 +63,7 @@ export const en: Messages = {
     price: 'Price',
     marketCap: 'Mcap',
     liquidity: 'Liquidity',
+    holders: 'Holders',
     dev: 'Dev',
     time: 'Time',
     empty: 'No matching signals',

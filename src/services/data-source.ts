@@ -3,6 +3,7 @@ import type { Dex, HolderData, LiquidityData, SecurityData, TokenProfile, WhaleI
 import { logger } from '../utils/logger.js';
 import { mulberry32 } from '../utils/rng.js';
 import { ChainScanner } from './chain-scanner.js';
+import { PumpPortalScanner } from './pumpportal-scanner.js';
 
 // ============================================================================
 // 数据源抽象 —— 六模块里的「数据采集器」依赖它拿数据。
@@ -286,6 +287,7 @@ export class SolanaDataSource implements DataSource {
     const mod = await import('@solana/web3.js');
     this.web3 = mod;
     this.connection = new mod.Connection(this.rpcUrl, {
+      // 拉交易最低 confirmed；日志订阅可在 ChainScanner 里单独用 processed
       commitment: 'confirmed',
       // 公共 RPC 易 429；禁止无限重试，避免启动卡死
       disableRetryOnRateLimit: true,
@@ -319,13 +321,15 @@ export class SolanaDataSource implements DataSource {
     return this.subscribeViaGeckoPoll(handler);
   }
 
-  /** 主路径：Pump + Raydium program logs → enrich 队列 */
+  /** 主路径：内盘 PumpPortal + 外盘 migration/Gecko/Ray 链上 → enrich 队列 */
   private async subscribeViaChainScan(handler: (t: TokenProfile) => void): Promise<() => void> {
+    // dex:mint —— 同 mint 内盘见过后，毕业上外盘仍可再评估
     const seen = new Set<string>();
     const queue: PoolCandidate[] = [];
     let processBusy = false;
     let stopped = false;
     const concurrency = 3;
+    const stopHandles: Array<() => void> = [];
 
     const processQueue = async () => {
       if (processBusy || stopped) return;
@@ -356,119 +360,189 @@ export class SolanaDataSource implements DataSource {
       }
     };
 
-    const scanner = new ChainScanner({
-      connection: this.connection,
-      PublicKey: this.web3.PublicKey,
-      enabled: config.chainScan.programs,
-      onDiscovery: (event) => {
-        if (stopped || seen.has(event.mint)) return;
-        seen.add(event.mint);
-        logger.info(
-          `链上发现 ${event.dex} mint=${event.mint.slice(0, 8)}… (${event.programKind})`,
-        );
-        queue.push({
-          mint: event.mint,
-          attrs: {},
-          pool: event.poolAddress ? { id: event.poolAddress } : { id: null },
-          imageUrl: null,
-          dex: event.dex,
-        });
-        void processQueue();
-      },
-    });
+    const enqueueCandidate = (
+      candidate: PoolCandidate,
+      sourceLabel: string,
+      detail: string,
+      options?: { quiet?: boolean },
+    ): boolean => {
+      if (stopped) return false;
+      const dex = candidate.dex ?? 'raydium';
+      const dedupeKey = `${dex}:${candidate.mint}`;
+      if (seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
+      if (!options?.quiet) logger.info(`${sourceLabel}发现 ${dex} ${detail}`);
+      queue.push({ ...candidate, dex });
+      void processQueue();
+      return true;
+    };
 
-    const stopScan = await scanner.start();
+    const enqueueDiscovery = (
+      event: {
+        mint: string;
+        dex: Dex;
+        programKind: string;
+        poolAddress: string | null;
+        name?: string | null;
+        symbol?: string | null;
+        imageUrl?: string | null;
+      },
+      sourceLabel: string,
+    ) => {
+      const label = event.symbol || event.name || event.mint.slice(0, 8);
+      enqueueCandidate(
+        {
+          mint: event.mint,
+          attrs: {
+            ...(event.symbol ? { symbol: event.symbol } : {}),
+            ...(event.name ? { name: event.name } : {}),
+          },
+          pool: event.poolAddress ? { id: event.poolAddress } : { id: null },
+          imageUrl: event.imageUrl ?? null,
+          dex: event.dex,
+        },
+        sourceLabel,
+        `${label} mint=${event.mint.slice(0, 8)}… (${event.programKind})`,
+      );
+    };
+
+    // 内盘 + 毕业外盘：PumpPortal（避开公共 RPC getTransaction）
+    if (config.chainScan.programs.pump && config.chainScan.pumpPortalEnabled) {
+      const pumpPortal = new PumpPortalScanner({
+        onDiscovery: (event) => {
+          const sourceLabel =
+            event.programKind === 'migration' ? 'PumpPortal毕业' : 'PumpPortal';
+          enqueueDiscovery(event, sourceLabel);
+        },
+      });
+      stopHandles.push(await pumpPortal.start());
+    }
+
+    // 链上：PumpPortal 开启时不再订 pump，只订 Raydium，显著降低 429
+    const chainEnabled = {
+      pump: config.chainScan.programs.pump && !config.chainScan.pumpPortalEnabled,
+      raydium: config.chainScan.programs.raydium,
+    };
+    if (chainEnabled.pump || chainEnabled.raydium) {
+      const scanner = new ChainScanner({
+        connection: this.connection,
+        PublicKey: this.web3.PublicKey,
+        enabled: chainEnabled,
+        commitment: config.chainScan.commitment,
+        parseConcurrency: config.chainScan.parseConcurrency,
+        onDiscovery: (event) => enqueueDiscovery(event, '链上'),
+      });
+      stopHandles.push(await scanner.start());
+    } else {
+      logger.info('链上 program 订阅已跳过（Pump 由 PumpPortal 承担，Raydium 未启用）');
+    }
+
+    // 外盘补强：并行 Gecko new_pools（有退避；与内盘共用评估队列）
+    if (config.chainScan.geckoDiscoveryEnabled) {
+      stopHandles.push(
+        this.startGeckoDiscoveryPoll({
+          isStopped: () => stopped,
+          // 错开启动瞬间，降低与其它 Gecko 调用撞 429
+          initialDelayMs: 45_000,
+          onCandidates: (candidates, meta) => {
+            let novel = 0;
+            for (const candidate of candidates) {
+              const label =
+                String(candidate.attrs?.symbol ?? candidate.attrs?.name ?? '').trim() ||
+                candidate.mint.slice(0, 8);
+              const added = enqueueCandidate(
+                candidate,
+                'Gecko',
+                `${label} mint=${candidate.mint.slice(0, 8)}… (${meta.kind})`,
+                { quiet: true },
+              );
+              if (added) novel += 1;
+            }
+            if (novel === 0) {
+              logger.info(`Gecko 轮询：本轮 ${candidates.length} 条均为已见`);
+            } else {
+              logger.info(
+                `Gecko 轮询：本轮新增 ${novel} / ${candidates.length}（${meta.kind}，评估队列 ${queue.length}）`,
+              );
+            }
+          },
+          onRateLimited: (delayMs) => {
+            logger.warn(`Gecko 限流，外盘轮询退避 ${Math.round(delayMs / 1000)}s`);
+          },
+        }),
+      );
+    }
+
     return () => {
       stopped = true;
-      stopScan();
+      for (const stop of stopHandles) stop();
       queue.length = 0;
     };
   }
 
-  /** 回退：Gecko new_pools 轮询（CHAIN_SCAN_ENABLED=false） */
-  private async subscribeViaGeckoPoll(handler: (t: TokenProfile) => void): Promise<() => void> {
-    const seen = new Set<string>();
-    const queue: PoolCandidate[] = [];
+  /** Gecko new_pools 轮询；可与链上发现并行，也可单独作为回退源 */
+  private startGeckoDiscoveryPoll(opts: {
+    isStopped: () => boolean;
+    onCandidates: (
+      candidates: PoolCandidate[],
+      meta: { kind: 'new_pools' | 'trending_pools' | 'mixed' },
+    ) => void;
+    onRateLimited?: (delayMs: number) => void;
+    /** 并行模式下默认只拉 new_pools，降低 429 */
+    newPoolsOnly?: boolean;
+    baseIntervalMs?: number;
+    initialDelayMs?: number;
+  }): () => void {
+    const baseIntervalMs = opts.baseIntervalMs ?? 30_000;
+    const maxBackoffMs = 5 * 60_000;
+    const newPoolsOnly = opts.newPoolsOnly ?? true;
+    const initialDelayMs = Math.max(0, opts.initialDelayMs ?? 0);
     let pollBusy = false;
-    let processBusy = false;
     let stopped = false;
     let timer: NodeJS.Timeout | null = null;
-    let backoffMs = 30_000;
-    const baseIntervalMs = 30_000;
-    const maxBackoffMs = 5 * 60_000;
-    const concurrency = 3;
+    let backoffMs = baseIntervalMs;
 
     const scheduleNext = (delayMs: number) => {
-      if (stopped) return;
+      if (stopped || opts.isStopped()) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         void tick();
       }, delayMs);
     };
 
-    const processQueue = async () => {
-      if (processBusy || stopped) return;
-      processBusy = true;
-      try {
-        while (queue.length > 0 && !stopped) {
-          const batch = queue.splice(0, concurrency);
-          await Promise.all(
-            batch.map(async (candidate) => {
-              try {
-                const profile = await this.enrich(
-                  candidate.mint,
-                  candidate.attrs,
-                  candidate.pool,
-                  candidate.imageUrl,
-                  candidate.dex,
-                );
-                if (profile && !stopped) handler(profile);
-              } catch {
-                /* 单币富化失败跳过 */
-              }
-            }),
-          );
-        }
-      } finally {
-        processBusy = false;
-        if (queue.length > 0 && !stopped) void processQueue();
-      }
-    };
-
     const tick = async () => {
-      if (pollBusy || stopped) return;
+      if (pollBusy || stopped || opts.isStopped()) return;
       pollBusy = true;
       let nextDelay = baseIntervalMs;
       try {
-        const { candidates: list, rateLimited } = await this.fetchNewCandidates(16);
-        if (rateLimited) {
-          backoffMs = Math.min(maxBackoffMs, Math.max(backoffMs * 2, baseIntervalMs * 2));
-          nextDelay = backoffMs;
-          logger.warn(`Gecko 限流，发现轮询退避 ${Math.round(nextDelay / 1000)}s`);
-        } else {
-          backoffMs = baseIntervalMs;
-          nextDelay = baseIntervalMs;
-          let novel = 0;
-          for (const candidate of list) {
-            if (seen.has(candidate.mint)) continue;
-            seen.add(candidate.mint);
-            novel += 1;
-            queue.push(candidate);
-          }
-          if (novel === 0) {
-            logger.info(`发现轮询：本轮 ${list.length} 条均为已见，继续等待新池`);
+        if (newPoolsOnly) {
+          const result = await this.fetchPoolCandidatesSafe('new_pools', 16);
+          if (result.rateLimited) {
+            backoffMs = Math.min(maxBackoffMs, Math.max(backoffMs * 2, baseIntervalMs * 2));
+            nextDelay = backoffMs;
+            opts.onRateLimited?.(nextDelay);
           } else {
-            logger.info(
-              `发现轮询：本轮新增 ${novel} / ${list.length}（评估队列 ${queue.length}，并发 ${concurrency}）`,
-            );
-            void processQueue();
+            backoffMs = baseIntervalMs;
+            nextDelay = baseIntervalMs;
+            opts.onCandidates(result.candidates, { kind: 'new_pools' });
+          }
+        } else {
+          const { candidates, rateLimited } = await this.fetchNewCandidates(16);
+          if (rateLimited) {
+            backoffMs = Math.min(maxBackoffMs, Math.max(backoffMs * 2, baseIntervalMs * 2));
+            nextDelay = backoffMs;
+            opts.onRateLimited?.(nextDelay);
+          } else {
+            backoffMs = baseIntervalMs;
+            nextDelay = baseIntervalMs;
+            opts.onCandidates(candidates, { kind: 'mixed' });
           }
         }
       } catch (error) {
         backoffMs = Math.min(maxBackoffMs, Math.max(backoffMs * 2, baseIntervalMs * 2));
         nextDelay = backoffMs;
         logger.warn(
-          `发现轮询失败，${Math.round(nextDelay / 1000)}s 后重试：${
+          `Gecko 轮询失败，${Math.round(nextDelay / 1000)}s 后重试：${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -478,11 +552,86 @@ export class SolanaDataSource implements DataSource {
       }
     };
 
-    logger.info('链上扫链已关闭，使用 Gecko 轮询发现');
-    void tick();
+    logger.info(
+      newPoolsOnly
+        ? `Gecko 外盘轮询已启动（new_pools，与内盘并行${initialDelayMs ? `，首轮 ${Math.round(initialDelayMs / 1000)}s 后` : ''}）`
+        : 'Gecko 发现轮询已启动（new_pools + trending）',
+    );
+    if (initialDelayMs > 0) scheduleNext(initialDelayMs);
+    else void tick();
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+    };
+  }
+
+  /** 回退：Gecko 轮询（CHAIN_SCAN_ENABLED=false） */
+  private async subscribeViaGeckoPoll(handler: (t: TokenProfile) => void): Promise<() => void> {
+    const seen = new Set<string>();
+    const queue: PoolCandidate[] = [];
+    let processBusy = false;
+    let stopped = false;
+    const concurrency = 3;
+
+    const processQueue = async () => {
+      if (processBusy || stopped) return;
+      processBusy = true;
+      try {
+        while (queue.length > 0 && !stopped) {
+          const batch = queue.splice(0, concurrency);
+          await Promise.all(
+            batch.map(async (candidate) => {
+              try {
+                const profile = await this.enrich(
+                  candidate.mint,
+                  candidate.attrs,
+                  candidate.pool,
+                  candidate.imageUrl,
+                  candidate.dex,
+                );
+                if (profile && !stopped) handler(profile);
+              } catch {
+                /* 单币富化失败跳过 */
+              }
+            }),
+          );
+        }
+      } finally {
+        processBusy = false;
+        if (queue.length > 0 && !stopped) void processQueue();
+      }
+    };
+
+    logger.info('链上扫链已关闭，使用 Gecko 轮询发现');
+    const stopPoll = this.startGeckoDiscoveryPoll({
+      isStopped: () => stopped,
+      newPoolsOnly: false,
+      onRateLimited: (delayMs) => {
+        logger.warn(`Gecko 限流，发现轮询退避 ${Math.round(delayMs / 1000)}s`);
+      },
+      onCandidates: (candidates) => {
+        let novel = 0;
+        for (const candidate of candidates) {
+          const dedupeKey = `${candidate.dex ?? 'raydium'}:${candidate.mint}`;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          novel += 1;
+          queue.push(candidate);
+        }
+        if (novel === 0) {
+          logger.info(`发现轮询：本轮 ${candidates.length} 条均为已见，继续等待新池`);
+        } else {
+          logger.info(
+            `发现轮询：本轮新增 ${novel} / ${candidates.length}（评估队列 ${queue.length}，并发 ${concurrency}）`,
+          );
+          void processQueue();
+        }
+      },
+    });
+
+    return () => {
+      stopped = true;
+      stopPoll();
       queue.length = 0;
     };
   }
@@ -597,6 +746,7 @@ export class SolanaDataSource implements DataSource {
         mint: resolved.mint,
         imageUrl: resolved.imageUrl,
         pool,
+        dex: this.dexFromGeckoAttrs(pool?.attributes),
         attrs: {
           ...(pool?.attributes ?? {}),
           // 明确写入目标代币价格/符号，避免 base=WSOL 时用错价
@@ -607,6 +757,12 @@ export class SolanaDataSource implements DataSource {
       });
     }
     return out;
+  }
+
+  private dexFromGeckoAttrs(attrs: Record<string, unknown> | null | undefined): Dex {
+    const dexId = String(attrs?.dex_id ?? '').toLowerCase();
+    if (dexId.includes('pump')) return 'pumpfun';
+    return 'raydium';
   }
 
   /** 从池子里解析 meme 侧 mint/价格（跳过 WSOL 作为标的） */
@@ -668,7 +824,8 @@ export class SolanaDataSource implements DataSource {
   private async fetchHolders(mint: string, rug: any): Promise<HolderData> {
     let top10Pct = 0;
     let largestWhalePct = 0;
-    const total = -1;
+    const rugTotal = numOr0(rug?.totalHolders);
+    const total = rugTotal > 0 ? Math.floor(rugTotal) : -1;
     const whales: WhaleInfo[] = [];
 
     // 优先 RugCheck（不依赖公共 RPC 配额）
@@ -788,17 +945,22 @@ export class SolanaDataSource implements DataSource {
           ? 'pumpfun'
           : 'raydium');
 
+      // 新币 RugCheck 常无 meta；优先发现源 attrs（PumpPortal name/symbol）
       const rawSymbol = String(
-        tokenMeta.symbol ?? attrs?.symbol ?? this.symbolFromPoolName(String(attrs?.name ?? '')) ?? 'UNKNOWN',
+        attrs?.symbol ||
+          tokenMeta.symbol ||
+          this.symbolFromPoolName(String(attrs?.name ?? '')) ||
+          'UNKNOWN',
       ).trim();
       const symbol = rawSymbol.includes('/')
         ? this.symbolFromPoolName(rawSymbol)
         : rawSymbol || 'UNKNOWN';
+      const displayName = String(attrs?.name || tokenMeta.name || symbol).trim() || symbol;
 
       return {
         mint,
         symbol: symbol.toUpperCase(),
-        name: String(tokenMeta.name ?? attrs?.name ?? symbol),
+        name: displayName,
         imageUrl,
         dex,
         poolAddress: String(pool?.id ?? lp?.pool_pubkey ?? null),

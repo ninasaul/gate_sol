@@ -9,6 +9,7 @@ export interface DashboardSignal {
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number;
+  holderCount: number;
   devPct: number;
   whaleCount: number;
   ts: number;

@@ -17,6 +17,7 @@ export interface DashboardSignal {
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number;
+  holderCount: number;
   devPct: number;
   whaleCount: number;
   ts: number;
@@ -125,6 +126,7 @@ export function buildDashboardState(pipeline: Pipeline, startedAt: number): Dash
       priceUsd: report.token.priceUsd,
       marketCapUsd: report.token.marketCapUsd || 0,
       liquidityUsd: report.token.liquidity.usd,
+      holderCount: report.token.holders.total,
       devPct: report.token.holders.devPct,
       whaleCount: report.token.holders.whaleCount,
       ts: report.token.discoveredAtMs,

@@ -14,6 +14,11 @@ export interface ChainDiscovery {
   signature: string;
   poolAddress: string | null;
   programKind: ChainProgramKind;
+  /** 发现源自带的元数据（如 PumpPortal name/symbol） */
+  name?: string | null;
+  symbol?: string | null;
+  imageUrl?: string | null;
+  uri?: string | null;
 }
 
 export interface ChainScannerOptions {
@@ -23,6 +28,8 @@ export interface ChainScannerOptions {
   enabled: { pump: boolean; raydium: boolean };
   onDiscovery: (event: ChainDiscovery) => void;
   commitment?: 'processed' | 'confirmed' | 'finalized';
+  /** 并行解析交易数，默认 4 */
+  parseConcurrency?: number;
 }
 
 /**
@@ -35,6 +42,7 @@ export class ChainScanner {
   private readonly enabled: { pump: boolean; raydium: boolean };
   private readonly onDiscovery: (event: ChainDiscovery) => void;
   private readonly commitment: 'processed' | 'confirmed' | 'finalized';
+  private readonly parseConcurrency: number;
 
   private stopped = false;
   private subscriptionIds: number[] = [];
@@ -44,14 +52,20 @@ export class ChainScanner {
   private seenSignatures = new Set<string>();
   private parseBusy = false;
   private parseQueue: Array<{ signature: string; spec: ChainProgramSpec }> = [];
-  private readonly maxParseQueue = 40;
+  private readonly maxParseQueue = 80;
+  /** 动态并发：遇 429 降到 1，连续成功再抬回目标值 */
+  private activeConcurrency: number;
+  private rateLimitBackoffMs = 0;
+  private successStreak = 0;
 
   constructor(opts: ChainScannerOptions) {
     this.connection = opts.connection;
     this.PublicKey = opts.PublicKey;
     this.enabled = opts.enabled;
     this.onDiscovery = opts.onDiscovery;
-    this.commitment = opts.commitment ?? 'confirmed';
+    this.commitment = opts.commitment ?? 'processed';
+    this.parseConcurrency = Math.max(1, Math.min(8, opts.parseConcurrency ?? 4));
+    this.activeConcurrency = this.parseConcurrency;
   }
 
   async start(): Promise<() => void> {
@@ -61,7 +75,9 @@ export class ChainScanner {
     const kinds = this.activeSpecs()
       .map((spec) => spec.kind)
       .join(', ');
-    logger.info(`链上扫链已启动：${kinds || '（无启用程序）'} · commitment=${this.commitment}`);
+    logger.info(
+      `链上扫链已启动：${kinds || '（无启用程序）'} · 订阅=${this.commitment} · 解析目标并发 ${this.parseConcurrency}`,
+    );
     return () => this.stop();
   }
 
@@ -184,20 +200,62 @@ export class ChainScanner {
     this.parseBusy = true;
     try {
       while (this.parseQueue.length > 0 && !this.stopped) {
-        const item = this.parseQueue.shift();
-        if (!item) break;
-        try {
-          const discovery = await this.parseSignature(item.signature, item.spec);
-          if (discovery && !this.stopped) this.onDiscovery(discovery);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          logger.warn(`解析交易失败 ${item.signature.slice(0, 12)}…：${message}`);
-          // 公共 RPC 易 429：短暂冷却，避免解析队列打爆节点
-          if (/429|Too Many Requests|rate.?limit/i.test(message)) {
-            await new Promise((resolve) => setTimeout(resolve, 1_200));
+        if (this.rateLimitBackoffMs > 0) {
+          const waitMs = this.rateLimitBackoffMs;
+          logger.warn(`RPC 限流冷却 ${Math.round(waitMs / 1000)}s（解析并发降至 ${this.activeConcurrency}）`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          if (this.stopped) break;
+        }
+
+        const batch = this.parseQueue.splice(0, this.activeConcurrency);
+        const results = await Promise.all(
+          batch.map(async (item) => {
+            try {
+              return {
+                discovery: await this.parseSignature(item.signature, item.spec),
+                rateLimited: false,
+                signature: item.signature,
+              };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.warn(`解析交易失败 ${item.signature.slice(0, 12)}…：${message}`);
+              return {
+                discovery: null,
+                rateLimited: /429|Too Many Requests|rate.?limit/i.test(message),
+                signature: item.signature,
+              };
+            }
+          }),
+        );
+
+        let hitRateLimit = false;
+        for (const result of results) {
+          if (result.rateLimited) hitRateLimit = true;
+          if (result.discovery && !this.stopped) this.onDiscovery(result.discovery);
+        }
+
+        if (hitRateLimit) {
+          this.activeConcurrency = 1;
+          this.successStreak = 0;
+          this.rateLimitBackoffMs = Math.min(
+            60_000,
+            Math.max(2_000, this.rateLimitBackoffMs ? this.rateLimitBackoffMs * 2 : 3_000),
+          );
+          // 积压过大时丢弃一半，优先保活而不是打爆公共 RPC
+          if (this.parseQueue.length > 20) {
+            const drop = Math.floor(this.parseQueue.length / 2);
+            this.parseQueue.splice(0, drop);
+            logger.warn(`解析队列过长，丢弃最早 ${drop} 条`);
+          }
+        } else {
+          this.successStreak += 1;
+          this.rateLimitBackoffMs = 0;
+          if (this.successStreak >= 8 && this.activeConcurrency < this.parseConcurrency) {
+            this.activeConcurrency += 1;
+            this.successStreak = 0;
+            logger.info(`RPC 恢复，解析并发升至 ${this.activeConcurrency}`);
           }
         }
-        await new Promise((resolve) => setTimeout(resolve, 250));
       }
     } finally {
       this.parseBusy = false;
@@ -209,10 +267,13 @@ export class ChainScanner {
     signature: string,
     spec: ChainProgramSpec,
   ): Promise<ChainDiscovery | null> {
+    // getParsedTransaction 最低要求 confirmed；订阅仍可用 processed 抢更早的 signature
+    const fetchCommitment =
+      this.commitment === 'finalized' ? 'finalized' : 'confirmed';
     const tx = await Promise.race([
       this.connection.getParsedTransaction(signature, {
         maxSupportedTransactionVersion: 1,
-        commitment: this.commitment,
+        commitment: fetchCommitment,
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
     ]);

@@ -1,5 +1,6 @@
 'use client';
 
+import { Empty } from '@/components/Empty';
 import { TokenLink } from '@/components/TokenLink';
 import type { DashboardSignal, DexFilter, VerdictFilter } from '@/lib/dashboard-types';
 import { fmtPct, fmtPrice, fmtUsd, hms } from '@/lib/format';
@@ -20,6 +21,8 @@ interface SignalPanelProps {
   onVerdictChange: (value: VerdictFilter) => void;
   onDexChange: (value: DexFilter) => void;
   onQueryChange: (value: string) => void;
+  /** 嵌在 Stage 面板内时隐藏重复计数 */
+  embedded?: boolean;
 }
 
 export function SignalPanel({
@@ -31,6 +34,7 @@ export function SignalPanel({
   onVerdictChange,
   onDexChange,
   onQueryChange,
+  embedded = false,
 }: SignalPanelProps) {
   const { messages, translateReason } = useLocale();
   const copy = messages.signal;
@@ -43,7 +47,7 @@ export function SignalPanel({
     reasons.map((reason) => translateReason(reason)).join(' · ');
 
   return (
-    <section className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-[var(--line)] px-2 py-1.5">
         {(['ALL', 'BUY', 'OBSERVE', 'SKIP'] as VerdictFilter[]).map((item) => (
           <button
@@ -80,9 +84,11 @@ export function SignalPanel({
           placeholder={copy.placeholder}
           className="ui-field ml-auto min-w-[120px] flex-1 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--text)] outline-none placeholder:text-[var(--text-3)]"
         />
-        <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)]">
-          {signals.length}/{totalCount}
-        </span>
+        {embedded ? null : (
+          <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)]">
+            {signals.length}/{totalCount}
+          </span>
+        )}
       </div>
 
       <div className="signal-table-head">
@@ -93,13 +99,14 @@ export function SignalPanel({
         <span className="text-right">{copy.price}</span>
         <span className="text-right">{copy.marketCap}</span>
         <span className="signal-col-liquidity text-right">{copy.liquidity}</span>
+        <span className="signal-col-holders text-right">{copy.holders}</span>
         <span className="signal-col-dev text-right">{copy.dev}</span>
         <span className="signal-col-time text-right">{copy.time}</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {signals.length === 0 ? (
-          <div className="empty-compact">{copy.empty}</div>
+          <Empty icon="pulse-2" text={copy.empty} />
         ) : (
           signals.map((signal) => {
             const dexMeta = DEX_META[signal.dex];
@@ -158,6 +165,11 @@ export function SignalPanel({
                 <span className="signal-col-liquidity text-right font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)] tabular-nums">
                   {fmtUsd(signal.liquidityUsd)}
                 </span>
+                <span className="signal-col-holders text-right font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)] tabular-nums">
+                  {typeof signal.holderCount === 'number' && signal.holderCount >= 0
+                    ? signal.holderCount
+                    : '--'}
+                </span>
                 <span className="signal-col-dev text-right font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-3)]">
                   {fmtPct(signal.devPct)}
                 </span>
@@ -169,6 +181,6 @@ export function SignalPanel({
           })
         )}
       </div>
-    </section>
+    </div>
   );
 }

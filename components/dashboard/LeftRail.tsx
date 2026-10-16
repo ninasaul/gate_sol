@@ -1,5 +1,6 @@
 'use client';
 
+import { Empty } from '@/components/Empty';
 import { SolarIcon } from '@/components/SolarIcon';
 import { TokenLink } from '@/components/TokenLink';
 import type { DashboardConfig, DashboardPosition, DashboardState } from '@/lib/dashboard-types';
@@ -43,7 +44,7 @@ export function LeftRail({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {positions.length === 0 ? (
-            <div className="empty-compact">{copy.emptyPositions}</div>
+            <Empty icon="wallet" text={copy.emptyPositions} />
           ) : (
             positions.map((position) => {
               const up = position.unrealizedPct >= 0;
@@ -110,7 +111,7 @@ export function LeftRail({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {watchlist.length === 0 ? (
-            <div className="empty-compact">{copy.emptyWatch}</div>
+            <Empty icon="eye" text={copy.emptyWatch} />
           ) : (
             watchlist.slice(0, 40).map((item, index) => (
               <div key={`${item.mint}-${item.symbol}-${index}`} className="row-compact ui-row">
@@ -138,7 +139,7 @@ export function LeftRail({
         </div>
         <div className="max-h-[120px] space-y-1.5 overflow-y-auto px-2 py-1.5">
           {rejectItems.length === 0 ? (
-            <div className="empty-compact !py-2">{copy.emptyReject}</div>
+            <Empty icon="forbidden" text={copy.emptyReject} size="compact" />
           ) : (
             rejectItems.slice(0, 5).map((item) => (
               <div key={item.reason}>

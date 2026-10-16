@@ -40,6 +40,25 @@ export const config = {
     /** live 下默认开启；false 时回退 Gecko 轮询发现 */
     enabled: bool('CHAIN_SCAN_ENABLED', true),
     programs: parseChainPrograms(process.env.CHAIN_SCAN_PROGRAMS),
+    /** 日志订阅 commitment；拉交易固定 confirmed+ */
+    commitment: ((): 'processed' | 'confirmed' | 'finalized' => {
+      const value = (process.env.CHAIN_SCAN_COMMITMENT ?? 'processed').toLowerCase();
+      if (value === 'confirmed' || value === 'finalized') return value;
+      return 'processed';
+    })(),
+    /** 并行 getParsedTransaction 数；公共 RPC 默认 1 */
+    parseConcurrency: Math.max(1, Math.min(8, num('CHAIN_SCAN_PARSE_CONCURRENCY', 1))),
+    /**
+     * Pump 发现走 PumpPortal 免费 WS（不打 getTransaction）。
+     * 默认 true，避免公共 RPC 429；为 true 时链上不再订阅 pump program。
+     * 同时订阅 subscribeMigration（毕业外盘）。
+     */
+    pumpPortalEnabled: bool('PUMPPORTAL_ENABLED', true),
+    /**
+     * 链上扫链开启时，是否并行 Gecko new_pools 补外盘新 pair。
+     * 默认 true；仅 Gecko 限流严重时可关。
+     */
+    geckoDiscoveryEnabled: bool('GECKO_DISCOVERY_ENABLED', true),
   },
 
   // —— 六模块筛选阈值 ——

@@ -61,6 +61,7 @@ export interface Messages {
     price: string;
     marketCap: string;
     liquidity: string;
+    holders: string;
     dev: string;
     time: string;
     empty: string;

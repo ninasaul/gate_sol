@@ -118,6 +118,7 @@ export class Pipeline {
       priceUsd: token.priceUsd,
       marketCapUsd: token.marketCapUsd,
       liquidityUsd: token.liquidity.usd,
+      holderCount: token.holders.total,
       devPct: token.holders.devPct,
       whaleCount: token.holders.whaleCount,
       ts: Date.now(),

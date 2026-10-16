@@ -7,6 +7,7 @@ import {
   CrosshairMode,
   LineSeries,
   LineStyle,
+  TickMarkType,
   createChart,
   createSeriesMarkers,
   type IChartApi,
@@ -16,11 +17,38 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
+import { Empty } from '@/components/Empty';
 import { fmtUsd, hms } from '@/lib/format';
 import type { DashboardState } from '@/lib/dashboard-types';
 import { getChartThemeColors, type ChartThemeColors } from '@/lib/theme';
 import { useLocale } from '@/lib/use-locale';
 import { useTheme } from '@/lib/use-theme';
+
+function chartTimeToMs(time: Time): number | null {
+  return typeof time === 'number' ? time * 1000 : null;
+}
+
+/** 横轴刻度用本地时区，避免 lightweight-charts 默认 UTC 与十字光标差 8h */
+function formatLocalTickMark(time: Time, tickMarkType: TickMarkType): string | null {
+  const ms = chartTimeToMs(time);
+  if (ms == null) return null;
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  switch (tickMarkType) {
+    case TickMarkType.Year:
+      return String(date.getFullYear());
+    case TickMarkType.Month:
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+    case TickMarkType.DayOfMonth:
+      return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    case TickMarkType.Time:
+      return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    case TickMarkType.TimeWithSeconds:
+      return hms(ms);
+    default:
+      return hms(ms);
+  }
+}
 
 interface TrendChartProps {
   trend: DashboardState['trend'];
@@ -126,6 +154,7 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
         timeVisible: true,
         secondsVisible: true,
         rightOffset: 2,
+        tickMarkFormatter: formatLocalTickMark,
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -140,7 +169,10 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
       },
       localization: {
         priceFormatter: (value: number) => fmtUsd(value),
-        timeFormatter: (time: number) => hms(time * 1000),
+        timeFormatter: (time: Time) => {
+          const ms = chartTimeToMs(time);
+          return ms == null ? '' : hms(ms);
+        },
       },
     });
 
@@ -275,8 +307,8 @@ export function TrendChart({ trend, equity }: TrendChartProps) {
       <div className="relative min-h-0 flex-1">
         <div ref={containerRef} className="absolute inset-0" />
         {!trend.length ? (
-          <div className="absolute inset-0 grid place-items-center text-[11px] text-[var(--text-3)]">
-            {messages.chart.empty}
+          <div className="absolute inset-0 grid place-items-center">
+            <Empty icon="chart-2" text={messages.chart.empty} />
           </div>
         ) : null}
       </div>
